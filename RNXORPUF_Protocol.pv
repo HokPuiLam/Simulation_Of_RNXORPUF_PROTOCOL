@@ -1,0 +1,129 @@
+(*************************************************************
+ *                                                           *
+ *  Cryptographic protocol verifier                          *
+ *                                                           *
+ *  Bruno Blanchet, Vincent Cheval, and Marc Sylvestre       *
+ *                                                           *
+ *  Copyright (C) INRIA, CNRS 2000-2021                      *
+ *                                                           *
+ *************************************************************)
+
+(*
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details (in file LICENSE).
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+*)
+
+free c: channel.
+free sc: channel[private].
+type key.
+
+free DID:bitstring[private].
+free SID:bitstring[private].
+free C:bitstring[private].
+free eK:bitstring[private].
+free hK:bitstring[private].
+free sK:bitstring[private].
+
+
+fun senc(bitstring,key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m,k),k) = m.
+
+fun hash(bitstring,bitstring):bitstring.
+fun puf(bitstring):bitstring[private].
+fun convertkey(bitstring):key.
+
+event startsetup.
+event endsetup.
+event startauth.
+event endauth.
+event serverVerifyDID.
+event deviceVerifySID.
+event serverVerifyV0.
+event deviceVerifyV1.
+event serverVerifyV2andR.
+event deviceSendEV0.
+event serverSendEV1.
+event deviceSendEV2.
+
+
+query attacker(C).
+query attacker(eK).
+query attacker(hK).
+query attacker(sK).
+query inj-event(serverVerifyV0)==>inj-event(deviceSendEV0).
+query inj-event(deviceVerifyV1)==>inj-event(serverSendEV1).
+query inj-event(serverVerifyV2andR)==>inj-event(deviceSendEV2).
+
+let Device() = 
+	event startsetup;
+	(*stepup step1*)
+	out(sc,DID);
+	
+	(*stepup step3*)
+	in(sc,(Reg2SID:bitstring,Reg2eK:bitstring,Reg2hK:bitstring,Reg2C:bitstring));
+	let R = puf(C) in 
+	out(sc,R);
+	
+	(*auth step1*)
+	event startauth;
+	let V0 = hash((DID,sK),hK) in
+	let EV0 = senc((sK,V0),convertkey(eK)) in
+	event deviceSendEV0;
+	out(c,(DID,EV0));
+
+	
+	(*auth step3*)
+	in(c,(M2SID:bitstring,M2EV1:bitstring));
+	event deviceVerifySID;
+	let (sK:bitstring,C:bitstring,V1:bitstring) = sdec(M2EV1,convertkey(eK)) in
+	event deviceVerifyV1;
+	new Cnext:bitstring;
+	let R = puf(C) in
+	let Rnext = puf(Cnext) in 
+	let V2 = hash((DID,sK),hK) in
+	let EV2 = senc((sK,R,Cnext,Rnext,V2),convertkey(eK)) in
+	event deviceSendEV2;
+	out(c,(DID,EV2)).
+
+	
+let Server() =
+	(*stepup step2*)
+	in(sc,Reg1DID:bitstring);
+	out(sc,(SID,eK,hK,C));
+	
+	(*stepup step4*)
+	in(sc,Reg3R:bitstring);
+	event endsetup;
+	
+	(*auth step2*)
+	in(c,(M1DID:bitstring,M1EV0:bitstring));
+	event serverVerifyDID;
+	let (M1sK:bitstring,M1V0:bitstring) = sdec(M1EV0,convertkey(eK)) in
+	event serverVerifyV0;
+	let V1 = hash((SID,sK),hK) in
+	let EV1 = senc((sK,C,V1),convertkey(eK)) in 
+	event serverSendEV1;
+	out(c,(SID,EV1));
+	
+	(*auth step4*)
+	in(c,(M3DID:bitstring,M3EV2:bitstring));
+	event serverVerifyDID;
+	let (sK:bitstring,R:bitstring,Cnext:bitstring,Rnext:bitstring,V2:bitstring) = sdec(M3EV2,convertkey(eK)) in
+	event serverVerifyV2andR;
+	event endauth.
+	
+process 
+	(Device()) | (Server())
